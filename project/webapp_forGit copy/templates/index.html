@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Sound Recordings Dashboard</title>
+  <style>
+    body {
+      font-family: system-ui, Arial;
+      margin: 20px;
+      background: #fafafa;
+    }
+    h1, h2, h3 {
+      margin: 0 0 10px 0;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: #fff;
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    th, td {
+      border-bottom: 1px solid #eee;
+      padding: 8px 10px;
+    }
+    th {
+      background: #f4f4f4;
+      text-align: left;
+    }
+    audio {
+      width: 220px;
+    }
+    .labels {
+      font-size: 0.95rem;
+      color: #222;
+    }
+    .muted {
+      color: #666;
+      font-size: 0.85rem;
+    }
+
+    /* Image gallery section */
+    #image-gallery {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin: 20px 0;
+    }
+    .img-card {
+      background: #ffffff;
+      border-radius: 10px;
+      padding: 12px;
+      width: 180px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+    .img-preview {
+      width: 100%;
+      border-radius: 8px;
+    }
+    .img-meta {
+      font-size: 12px;
+      margin-top: 6px;
+      color: #333;
+    }
+    .img-id {
+      font-size: 11px;
+      color: #777;
+    }
+
+    /* ThingSpeak layout */
+    .ts-section {
+      margin-top: 40px;
+    }
+
+    .ts-cards {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      justify-content: center;
+      margin: 20px 0;
+    }
+
+    .ts-card {
+      background: #ffffff;
+      border-radius: 10px;
+      padding: 18px 22px;
+      min-width: 140px;
+      text-align: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+
+    .ts-card-title {
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #555;
+      margin-bottom: 6px;
+    }
+
+    .ts-card-value {
+      font-size: 1.8rem;
+      font-weight: 600;
+      color: #111;
+    }
+
+    .ts-card-unit {
+      font-size: 0.85rem;
+      color: #777;
+    }
+
+    #ts-graph-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 10px;
+    }
+
+    .ts-graph-box {
+      background: #fff;
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+
+    @media (max-width: 800px) {
+      #ts-graph-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+  </style>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+  <div id="loading" style="font-size: 20px; padding: 20px; color: #333;">
+    Loading data… please wait.
+  </div>
+
+  <div id="app-content" style="display:none;">
+
+    <!-- Sound recordings table -->
+    <h1>Sound Recordings</h1>
+    <p class="muted">Shows Firestore records and plays WAV files.</p>
+
+    <table id="records">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Labels (top3)</th>
+          <th>Probs</th>
+          <th>Audio</th>
+          <th>Firestore</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <!-- NEW: IMAGE COLLECTION SECTION -->
+    <h1 style="margin-top:40px;">Latest items detected</h1>
+    <p class="muted">Images saved of the lastest 5 items at checkout.</p>
+
+    <div id="image-gallery"></div>
+
+    <!-- ThingSpeak section -->
+    <div class="ts-section">
+      <h1>ThingSpeak Dashboard</h1>
+
+      <h3>Latest Values</h3>
+      <div id="ts-cards" class="ts-cards"></div>
+
+      <h3>Trend Graph</h3>
+      <div id="ts-graph-row">
+        <div class="ts-graph-box">
+          <h4 style="margin-top:0">Digital States (0 / 1)</h4>
+          <canvas id="ts-binary-chart" width="450" height="280"></canvas>
+        </div>
+
+        <div class="ts-graph-box">
+          <h4 style="margin-top:0">Analog Values (lightVal/100, Distance(cm))</h4>
+          <canvas id="ts-analog-chart" width="450" height="280"></canvas>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    function showApp() {
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("app-content").style.display = "block";
+    }
+  </script>
+</body>
+</html>
