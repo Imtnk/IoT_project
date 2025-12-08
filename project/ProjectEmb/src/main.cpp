@@ -6,16 +6,11 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
-// -------------------------------------------------------------
-// WIFI CONFIG
-// -------------------------------------------------------------
-#define WIFI_SSID       ""
-#define WIFI_PASSWORD   ""
+#define WIFI_SSID       "2e"
+#define WIFI_PASSWORD   "Thumb1234"
 
-// -------------------------------------------------------------
-// LOCAL API FOR IMAGE CLASSIFICATION CHECK
-// -------------------------------------------------------------
-const char* CLASSIFICATION_API_URL = "http://192.168.1.152:5001/api/images";
+
+const char* CLASSIFICATION_API_URL = "http://10.248.108.149:5001/api/images";
 
 unsigned long lastClassificationCheck = 0;
 unsigned long CLASSIFICATION_CHECK_INTERVAL = 5000;
@@ -24,10 +19,10 @@ String lastImageID = "";
 // -------------------------------------------------------------
 // THINGSPEAK CONFIG
 // -------------------------------------------------------------
-const char* THINGSPEAK_API_KEY = "";
-const char* THINGSPEAK_SERVER  = "";
+const char* THINGSPEAK_API_KEY = "8JY8J009G99P8PBI";
+const char* THINGSPEAK_SERVER  = "http://api.thingspeak.com/update";
 
-unsigned long lastSendMillis      = 0;
+unsigned long lastSendMillis      = 0; 
 const unsigned long SEND_INTERVAL = 20000;
 
 // -------------------------------------------------------------
@@ -71,7 +66,8 @@ bool          itemWasOnCounter   = false;
 bool          itemProcessed      = false;
 
 unsigned long lastButtonPress = 0;
-int           lastButtonState = 0;
+// we now track RAW button for edge detection
+int           lastButtonRaw = 0;
 
 bool          waitingAfterPickup     = false;
 unsigned long pickupDoorCloseSince   = 0;
@@ -80,6 +76,10 @@ int handDetectLatched = 0;
 
 // AI state: true when AI already finished classification for current item
 bool          aiDoneForCurrentItem   = false;
+
+// latched “virtual” button state that you want:
+// 1 after press, stays 1 until AI done, then back to 0
+bool          buttonLatched          = false;
 
 // -------------------------------------------------------------
 // SYSTEM STATES
@@ -278,9 +278,10 @@ void loop() {
   // ==============================================================  
   // RAW SENSOR READINGS
   // ==============================================================  
-  int magnetic   = digitalRead(MAGNETIC_PIN);
-  int buttonRaw  = digitalRead(BUTTON_PIN);
-  int buttonState = (buttonRaw == HIGH) ? 1 : 0;
+  int magnetic      = digitalRead(MAGNETIC_PIN);
+
+  int buttonRawLevel   = digitalRead(BUTTON_PIN);       // HIGH = not pressed (pullup)
+  int buttonRawPressed = (buttonRawLevel == HIGH) ? 1 : 0;
 
   int   lightVal   = analogRead(LIGHT_PIN);
   int   lightState = (lightVal > LIGHT_THRESHOLD) ? 1 : 0;
@@ -290,11 +291,35 @@ void loop() {
   bool doorOpen      = (magnetic == LOW);
   bool counterEmpty  = (lightState == 1);
   bool itemOnCounter = !counterEmpty;
-  bool buttonPressed = (buttonState == 1);
 
+  // physical hand detection
   bool handInPath = false;
   if (doorOpen && distanceRaw > 0 && distance < HAND_DIST_THRESHOLD_CM) handInPath = true;
   if (handInPath) handDetectLatched = 1;
+
+  // ==============================================================  
+  // BUTTON EDGE → LATCH "buttonState"
+  // ==============================================================  
+  if (buttonRawPressed == 1 && lastButtonRaw == 0) {
+    // physical rising edge
+    lastButtonPress = now;
+    Serial.println("🔘 Physical button PRESS detected.");
+
+    if (itemOnCounter) {
+      Serial.println("🟧 ITEM ON COUNTER → classification requested, latch buttonState=1, go WAITING.");
+      buttonLatched          = true;   // stays 1 until AI done
+      itemProcessed          = true;
+      aiDoneForCurrentItem   = false;  // new request
+    } else {
+      Serial.println("⚠ Button pressed with NO item on counter (will be abnormal).");
+      // we do NOT latch button in this case
+    }
+  }
+  lastButtonRaw = buttonRawPressed;
+
+  // This is your logical buttonState (for serial + ThingSpeak)
+  int buttonState = buttonLatched ? 1 : 0;
+  bool buttonPressed = (buttonState == 1);   // "pressed" in logical sense
 
   // ==============================================================  
   // CHECK FOR NEW CLASSIFIED IMAGE FROM API
@@ -303,22 +328,15 @@ void loop() {
   if (newImageDetected && itemProcessed) {
     // Only relevant if this box has actually sent a classification request
     aiDoneForCurrentItem = true;
-    Serial.println("🔵 AI finished classification for current item.");
+    buttonLatched        = false;      // ← reset logical buttonState to 0
+    Serial.println("🔵 AI finished classification for current item → buttonState reset to 0.");
   }
 
-  // ==============================================================  
-  // BUTTON PRESS = REQUEST CLASSIFICATION
-  // ==============================================================  
-  if (buttonState == 1 && lastButtonState == 0) {
-    lastButtonPress = now;
+  // Recompute logical buttonState after potential reset
+  buttonState  = buttonLatched ? 1 : 0;
+  buttonPressed = (buttonState == 1);
 
-    if (itemOnCounter) {
-      Serial.println("🟧 ITEM DETECTED — classification requested, go to WAITING (orange)");
-      itemProcessed        = true;   // classification requested
-      aiDoneForCurrentItem = false;  // reset for this item
-    }
-  }
-  lastButtonState = buttonState;
+  bool doorClose = !doorOpen;
 
   // -------------- DOOR OPEN LOGIC ----------------
   if (doorOpen && !doorWasOpen) {
@@ -343,16 +361,16 @@ void loop() {
   // -------------- ITEM TRACKING ----------------
   if (itemOnCounter && !itemWasOnCounter) {
     // new item placed
-    itemWasOnCounter   = true;
-    itemOnCounterSince = now;
-    itemProcessed      = false;      // new item → button not pressed yet
+    itemWasOnCounter     = true;
+    itemOnCounterSince   = now;
+    itemProcessed        = false;      // new item → need new press
     aiDoneForCurrentItem = false;
+    buttonLatched        = false;      // logical button back to 0
   } 
   else if (!itemOnCounter && itemWasOnCounter) {
     // item just removed
     itemWasOnCounter = false;
-    // If button was pressed but AI is NOT done yet → ABNORMAL
-    // If button + AI done → we will go back to NORMAL
+    // decision: NORMAL vs ABNORMAL handled below
   }
 
   unsigned long itemOnCounterFor = itemWasOnCounter ? (now - itemOnCounterSince) : 0;
@@ -370,11 +388,12 @@ void loop() {
   // --- New abnormal: item removed before AI finished ---
   if (!itemOnCounter && itemProcessed && !aiDoneForCurrentItem) {
     abnormal = true;
+    Serial.println("❌ Item removed BEFORE AI finished → ABNORMAL.");
   }
 
   // Old abnormal rules
   if (doorOpen && counterEmpty && doorOpenFor > DOOR_OPEN_GRACE_MS) abnormal = true;
-  if (buttonPressed && !itemOnCounter) abnormal = true;
+  if (buttonRawPressed && !itemOnCounter) abnormal = true; // physical press w/out item
   if (waitingAfterPickup && counterEmpty && (now - pickupDoorCloseSince > PICKUP_WAIT_MS)) abnormal = true;
   if (itemOnCounter && !itemProcessed && itemOnCounterFor > ITEM_ON_COUNTER_GRACE_MS) abnormal = true;
   if (doorOpen && handDuringOpen && itemOnCounter) abnormal = true;
@@ -407,12 +426,10 @@ void loop() {
       processing = true;
     } else {
       if (doorOpen) processing = true;
-      if (buttonPressed && itemOnCounter) processing = true;
+      // we don’t rely on latched button here anymore
     }
   }
 
-  // If AI just finished we already updated flags above; "newImageDetected"
-  // is only used to prevent overriding LED in the same loop if you want.
   if (abnormal)      systemState = STATE_ABNORMAL;
   else if (waiting)  systemState = STATE_WAITING;
   else if (processing) systemState = STATE_PROCESSING;
@@ -420,9 +437,10 @@ void loop() {
 
   // If item was classified AND now counter is empty → back to normal
   if (!itemOnCounter && itemProcessed && aiDoneForCurrentItem && !abnormal) {
-    Serial.println("🟢 Item removed AFTER AI done → NORMAL");
+    Serial.println("🟢 Item removed AFTER AI done → NORMAL.");
     itemProcessed        = false;
     aiDoneForCurrentItem = false;
+    buttonLatched        = false;
     systemState          = STATE_NORMAL;
   }
 
@@ -432,7 +450,8 @@ void loop() {
   Serial.println("---------------");
   Serial.print("Magnetic (0=open,1=close): ");   Serial.println(magnetic);
   Serial.print("DoorOpen: ");                    Serial.println(doorOpen ? 1 : 0);
-  Serial.print("ButtonState (1=pressed): ");     Serial.println(buttonState);
+  Serial.print("ButtonRawPressed (1=physical now): "); Serial.println(buttonRawPressed);
+  Serial.print("ButtonState latched (1=request active): "); Serial.println(buttonState);
   Serial.print("LightVal: ");                    Serial.println(lightVal);
   Serial.print("LightState (1=empty): ");        Serial.println(lightState);
   Serial.print("Distance: ");                    Serial.println(distance);
